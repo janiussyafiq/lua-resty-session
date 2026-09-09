@@ -375,9 +375,10 @@ identity provider's `sid` and `sub`), set with `session:set_revocation_keys`.
 `session.revoke(key, ttl, configuration)` marks a key without an open session;
 sessions carrying it that were created at or before the mark are rejected on
 `session:open`, later ones are not. `ttl` must cover the sessions' absolute
-timeout. Keys go through `hash_storage_key`, enable it when they may contain
-personal data. `session.revoke` always returns write errors;
-`revocation_fail_mode` applies to `session:open` and `session:destroy` only.
+timeout (`remember_absolute_timeout` when remember cookies are used). Keys go
+through `hash_storage_key`, enable it when they may contain personal data.
+`session.revoke` always returns write errors; `revocation_fail_mode` applies
+to `session:open` and `session:destroy` only.
 
 ```lua
 -- On login
@@ -911,7 +912,8 @@ See [configuration](#configuration) for possible configuration settings.
 It marks a revocation key (see `session:set_revocation_keys`) without an open
 session; sessions carrying the key that were created at or before the mark
 are rejected on `session:open`. `ttl` (in seconds) must cover the sessions'
-absolute timeout. Write errors are always returned.
+absolute timeout (`remember_absolute_timeout` when remember cookies are used).
+Write errors are always returned.
 
 ```lua
 local ok, err = require "resty.session".revoke("sid:" .. sid, 86400)

@@ -2981,7 +2981,8 @@ end
 -- Writes a mark for an application supplied key (see
 -- `session:set_revocation_keys`); sessions carrying it that were created
 -- at or before now are rejected on open. `ttl` must cover the sessions'
--- absolute timeout. Write failures are always returned.
+-- absolute timeout (`remember_absolute_timeout` with remember cookies).
+-- Write failures are always returned.
 --
 -- @function module.revoke
 -- @tparam string key revocation key

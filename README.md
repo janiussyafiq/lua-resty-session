@@ -200,6 +200,7 @@ http {
         * [session.start](#sessionstart)
         * [session.logout](#sessionlogout)
         * [session.destroy](#sessiondestroy)
+        * [session.revoke](#sessionrevoke)
     * [Instance Methods](#instance-methods)
         * [session:open](#sessionopen-1)
         * [session:save](#sessionsave)
@@ -216,6 +217,8 @@ http {
         * [session:get_audience](#sessionget_audience)
         * [session:set_subject](#sessionset_subject)
         * [session:get_subject](#sessionget_subject)
+        * [session:set_revocation_keys](#sessionset_revocation_keys)
+        * [session:get_revocation_keys](#sessionget_revocation_keys)
         * [session:get_property](#sessionget_property)
         * [session:set_remember](#sessionset_remember)
         * [session:get_remember](#sessionget_remember)
@@ -366,6 +369,23 @@ revoked. On `session:destroy`, the identifier is written to the selected
 storage with a TTL equal to the remaining session lifetime (rolling and
 absolute timeouts). The revocation mark is a lightweight sentinel; no session
 payload is stored.
+
+Sessions may also carry application supplied revocation keys (for example an
+identity provider's `sid` and `sub`), set with `session:set_revocation_keys`.
+`session.revoke(key, ttl, configuration)` marks a key without an open session;
+sessions carrying it that were created at or before the mark are rejected on
+`session:open`, later ones are not. `ttl` must cover the sessions' absolute
+timeout. Keys go through `hash_storage_key`, enable it when they may contain
+personal data. `session.revoke` always returns write errors;
+`revocation_fail_mode` applies to `session:open` and `session:destroy` only.
+
+```lua
+-- On login
+session:set_revocation_keys({ "sid:" .. sid, "sub:" .. sub })
+
+-- In a back-channel logout handler, without an open session
+require("resty.session").revoke("sid:" .. sid, 86400)
+```
 
 Use `revocation_fail_mode` to control behavior when the storage is unavailable:
 
@@ -884,6 +904,22 @@ local ok, err, exists, destroyed = require "resty.session".destroy({
 See [configuration](#configuration) for possible configuration settings.
 
 
+### session.revoke
+
+**syntax:** *ok, err = session.revoke(key, ttl, configuration)*
+
+It marks a revocation key (see `session:set_revocation_keys`) without an open
+session; sessions carrying the key that were created at or before the mark
+are rejected on `session:open`. `ttl` (in seconds) must cover the sessions'
+absolute timeout. Write errors are always returned.
+
+```lua
+local ok, err = require "resty.session".revoke("sid:" .. sid, 86400)
+```
+
+See [configuration](#configuration) for possible configuration settings.
+
+
 ## Instance Methods
 
 ### session:open
@@ -1113,6 +1149,33 @@ Get session subject.
 local session, err, exists = require "resty.session".open()
 if exists then
   local subject = session.get_subject()
+end
+```
+
+
+### session:set_revocation_keys
+
+**syntax:** *session:set_revocation_keys(keys)*
+
+Set application supplied revocation keys, e.g. an identity provider's `sid`
+and `sub`, so that `session.revoke` can revoke the session by them.
+
+```lua
+local session = require "resty.session".new()
+session:set_revocation_keys({ "sid:" .. sid, "sub:" .. sub })
+```
+
+
+### session:get_revocation_keys
+
+**syntax:** *keys = session:get_revocation_keys()*
+
+Get session revocation keys.
+
+```lua
+local session, err, exists = require "resty.session".open()
+if exists then
+  local keys = session:get_revocation_keys()
 end
 ```
 

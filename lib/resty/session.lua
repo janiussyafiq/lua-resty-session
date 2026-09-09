@@ -959,15 +959,22 @@ local function open(self, remember, meta_only)
     return nil, "missing session audience", true
   end
 
-  local keys = data[audience_index][4]
-  if keys then
-    for i = 1, #keys do
-      local revoked, err = is_revoked(self, keys[i], self.cookie_name, current_time, creation_time)
-      if err then
-        return nil, err
-      end
-      if revoked then
-        return nil, "session revoked"
+  for i = 1, count do
+    local keys = data[i][4]
+    if keys and (remember or i == audience_index) then
+      for j = 1, #keys do
+        local revoked, err = is_revoked(self, keys[j], self.cookie_name, current_time, creation_time)
+        if err then
+          return nil, err
+        end
+        if revoked then
+          if remember then
+            self.remember_meta = DUMMY_REMEMBER_META
+          else
+            self.meta = DUMMY_META
+          end
+          return nil, "session revoked"
+        end
       end
     end
   end

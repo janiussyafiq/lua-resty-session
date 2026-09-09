@@ -228,6 +228,76 @@ for _, st in ipairs({
         s2:close()
       end)
 
+      it("revoke: re-login after a revoked open gets a fresh session", function()
+        local cookies = {}
+        local s = session.new()
+        s:set_revocation_keys({ "sub:test" })
+        local session_cookie = save_session(s, cookies)
+        s:close()
+
+        assert.is_true(session.revoke("sub:test", long_ttl))
+
+        session.__set_ngx_var({
+          ["cookie_" .. cookie_name] = session_cookie,
+        })
+        local s2, err, exists = session.open()
+        assert.equals("session revoked", err)
+        assert.is_false(exists)
+
+        sleep(1)
+        s2:set_revocation_keys({ "sub:test" })
+        session_cookie = save_session(s2, cookies)
+        s2:close()
+
+        local s3
+        s3, err = open_session(session_cookie)
+        assert.is_not_nil(s3)
+        assert.is_nil(err)
+        s3:close()
+      end)
+
+      it("revoke: remember cookie carrying a revoked audience is not restored", function()
+        local conf = {
+          cookie_name = cookie_name,
+          storage = "cookie",
+          revocation = st,
+          remember = true,
+        }
+        conf[st] = storage_configs[st]
+        session.init(conf)
+
+        local cookies = {}
+        local a = session.new({ audience = "a" })
+        a:set_remember(true)
+        a:set_revocation_keys({ "sub:aud-a" })
+        local session_cookie = save_session(a, cookies)
+        local remember_cookie = extract_cookie("remember", cookies["Set-Cookie"])
+        a:close()
+
+        session.__set_ngx_var({
+          ["cookie_" .. cookie_name] = session_cookie,
+          ["cookie_remember"] = remember_cookie,
+        })
+        local b, err = session.open({ audience = "b" })
+        assert.equals("missing session audience", err)
+        b:set_remember(true)
+        cookies = {}
+        save_session(b, cookies)
+        remember_cookie = extract_cookie("remember", cookies["Set-Cookie"])
+        assert.is_not_equal("", remember_cookie)
+        b:close()
+
+        assert.is_true(session.revoke("sub:aud-a", long_ttl))
+
+        session.__set_ngx_header(cookies)
+        session.__set_ngx_var({
+          ["cookie_remember"] = remember_cookie,
+        })
+        local b2 = session.new({ audience = "b" })
+        local ok = b2:open()
+        assert.is_nil(ok)
+      end)
+
       it("destroy: rejected cookie cannot be reopened", function()
         local cookies = {}
         local s = session.new()

@@ -387,23 +387,18 @@ local function handle_revocation_error(self, err, msg)
 end
 
 
-local function is_session_revoked(self, sid, cookie_name)
-  if self.storage or not sid then
-    return false, nil
-  end
-
+local function is_revoked(self, key, cookie_name, current_time, creation_time)
   local revocation = self.revocation
   if not revocation then
     return false, nil
   end
 
-  local key, herr = self.hash_storage_key(sid)
-  if not key then
-    return nil, herr
+  local storage_key, err = self.hash_storage_key(key)
+  if not storage_key then
+    return nil, err
   end
 
-  local current_time = time()
-  local data, err = revocation:get(cookie_name, key, current_time)
+  local mark, err = revocation:get(cookie_name, storage_key, current_time)
   if err then
     local ok, rerr = handle_revocation_error(self, err, "unable to check session revocation")
     if not ok then
@@ -412,11 +407,12 @@ local function is_session_revoked(self, sid, cookie_name)
     return false, nil
   end
 
-  if data == REVOCATION_MARK then
+  if mark == REVOCATION_MARK then
     return true, nil
   end
 
-  return false, nil
+  local revoked_at = tonumber(mark)
+  return revoked_at ~= nil and revoked_at >= creation_time, nil
 end
 
 
@@ -795,7 +791,7 @@ local function open(self, remember, meta_only)
     end
   end
 
-  local revoked, err = is_session_revoked(self, sid, cookie_name)
+  local revoked, err = is_revoked(self, sid, cookie_name, current_time, creation_time)
   if err then
     return nil, err
   end
@@ -945,9 +941,13 @@ local function open(self, remember, meta_only)
   local audience_index
   local count = #data
   for i = 1, count do
-    if data[i][2] == audience then
+    -- cjson decodes the JSON null of a missing subject as userdata
+    if type(data[i][3]) == "userdata" then
+      data[i][3] = nil
+    end
+
+    if not audience_index and data[i][2] == audience then
       audience_index = i
-      break
     end
   end
 
@@ -957,6 +957,19 @@ local function open(self, remember, meta_only)
     self.data = data
     self.data_index = count + 1
     return nil, "missing session audience", true
+  end
+
+  local keys = data[audience_index][4]
+  if keys then
+    for i = 1, #keys do
+      local revoked, err = is_revoked(self, keys[i], self.cookie_name, current_time, creation_time)
+      if err then
+        return nil, err
+      end
+      if revoked then
+        return nil, "session revoked"
+      end
+    end
   end
 
   self.state = STATE_OPEN
@@ -1939,6 +1952,45 @@ end
 function metatable:get_subject()
   assert(self.state ~= STATE_CLOSED, "unable to get subject on closed session")
   return self.data[self.data_index][3]
+end
+
+
+---
+-- Set session revocation keys.
+--
+-- Revocation keys are application supplied identifiers carried in the
+-- session payload for the current audience, for example an identity
+-- provider's session or subject identifier. When a `revocation` storage
+-- is configured, `session:open` rejects a session that carries a key
+-- revoked with `session.revoke` at or after the session was created.
+--
+-- @function instance:set_revocation_keys
+-- @tparam table|nil keys array of revocation keys (`nil` clears them)
+--
+-- @usage
+-- local session = require("resty.session").new()
+-- session:set_revocation_keys({ "sid:" .. sid, "sub:" .. sub })
+function metatable:set_revocation_keys(keys)
+  assert(self.state ~= STATE_CLOSED, "unable to set revocation keys on closed session")
+  assert(keys == nil or type(keys) == "table", "invalid revocation keys")
+  self.data[self.data_index][4] = keys
+end
+
+
+---
+-- Get session revocation keys.
+--
+-- @function instance:get_revocation_keys
+-- @treturn table|nil array of revocation keys
+--
+-- @usage
+-- local session, err, exists = require("resty.session").open()
+-- if exists then
+--   local keys = session:get_revocation_keys()
+-- end
+function metatable:get_revocation_keys()
+  assert(self.state ~= STATE_CLOSED, "unable to get revocation keys on closed session")
+  return self.data[self.data_index][4]
 end
 
 

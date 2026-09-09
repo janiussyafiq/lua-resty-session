@@ -149,8 +149,8 @@ for _, st in ipairs({
         return extract_cookie(cookie_name, cookies["Set-Cookie"])
       end
 
-      local function open_session(session_cookie)
-        local s = session.new()
+      local function open_session(session_cookie, configuration)
+        local s = session.new(configuration)
         session.__set_ngx_var({
           ["cookie_" .. cookie_name] = session_cookie,
         })
@@ -163,6 +163,12 @@ for _, st in ipairs({
         return s
       end
 
+      local function mark_key(key)
+        return session.new().hash_storage_key(key)
+      end
+
+      local revocation_keys = { "sub:test", "sub:legacy", "sub:other", "sub:aud-a" }
+
       before_each(function()
         local conf = {
           cookie_name = cookie_name,
@@ -171,6 +177,12 @@ for _, st in ipairs({
         }
         conf[st] = storage_configs[st]
         session.init(conf)
+      end)
+
+      after_each(function()
+        for _, k in ipairs(revocation_keys) do
+          store:delete(cookie_name, mark_key(k), time())
+        end
       end)
 
       it("open succeeds for a valid session with revocation enabled", function()
@@ -234,6 +246,156 @@ for _, st in ipairs({
         assert.is_nil(err)
         assert.equals(value, s3:get(test_key))
         s3:close()
+      end)
+
+      it("revocation keys: round-trip through the cookie without a subject", function()
+        local cookies = {}
+        local s = session.new()
+        s:set_revocation_keys({ "sub:test", "sid:test" })
+        local session_cookie = save_session(s, cookies)
+        s:close()
+
+        local s2, err = open_session(session_cookie)
+        assert.is_not_nil(s2)
+        assert.is_nil(err)
+        assert.same({ "sub:test", "sid:test" }, s2:get_revocation_keys())
+        assert.is_nil(s2:get_subject())
+        s2:close()
+      end)
+
+      it("revocation keys: mark at or after creation revokes", function()
+        local cookies = {}
+        local s = session.new()
+        s:set_revocation_keys({ "sub:test" })
+        local session_cookie = save_session(s, cookies)
+        s:close()
+
+        local ok = store:set(cookie_name, mark_key("sub:test"), tostring(time()), long_ttl, time())
+        assert.is_not_nil(ok)
+
+        local s2, err = open_session(session_cookie)
+        assert.is_nil(s2)
+        assert.equals("session revoked", err)
+      end)
+
+      it("revocation keys: mark before creation does not revoke", function()
+        local ok = store:set(cookie_name, mark_key("sub:test"), tostring(time() - 1), long_ttl, time())
+        assert.is_not_nil(ok)
+
+        local cookies = {}
+        local s = session.new()
+        s:set_revocation_keys({ "sub:test" })
+        local session_cookie = save_session(s, cookies)
+        s:close()
+
+        local s2, err = open_session(session_cookie)
+        assert.is_not_nil(s2)
+        assert.is_nil(err)
+        assert.equals(value, s2:get(test_key))
+        s2:close()
+      end)
+
+      it("revocation keys: legacy mark revokes regardless of time", function()
+        local ok = store:set(cookie_name, mark_key("sub:legacy"), "1", long_ttl, time())
+        assert.is_not_nil(ok)
+
+        local cookies = {}
+        local s = session.new()
+        s:set_revocation_keys({ "sub:legacy" })
+        local session_cookie = save_session(s, cookies)
+        s:close()
+
+        local s2, err = open_session(session_cookie)
+        assert.is_nil(s2)
+        assert.equals("session revoked", err)
+      end)
+
+      it("revocation keys: mark for another key does not revoke", function()
+        local cookies = {}
+        local s = session.new()
+        s:set_revocation_keys({ "sub:test" })
+        local session_cookie = save_session(s, cookies)
+        s:close()
+
+        local ok = store:set(cookie_name, mark_key("sub:other"), tostring(time()), long_ttl, time())
+        assert.is_not_nil(ok)
+
+        local s2, err = open_session(session_cookie)
+        assert.is_not_nil(s2)
+        assert.is_nil(err)
+        assert.equals(value, s2:get(test_key))
+        s2:close()
+      end)
+
+      it("revocation keys: are scoped to the audience", function()
+        local cookies = {}
+        local s = session.new({ audience = "a" })
+        s:set_revocation_keys({ "sub:aud-a" })
+        local session_cookie = save_session(s, cookies)
+        s:close()
+
+        session.__set_ngx_var({
+          ["cookie_" .. cookie_name] = session_cookie,
+        })
+        local s2, err, exists = session.open({ audience = "b" })
+        assert.is_false(exists)
+        assert.equals("missing session audience", err)
+
+        local both_audiences_cookie = save_session(s2, cookies)
+        s2:close()
+
+        local ok = store:set(cookie_name, mark_key("sub:aud-a"), tostring(time()), long_ttl, time())
+        assert.is_not_nil(ok)
+
+        local sb, err_b = open_session(both_audiences_cookie, { audience = "b" })
+        assert.is_not_nil(sb)
+        assert.is_nil(err_b)
+        sb:close()
+
+        local sa, err_a = open_session(both_audiences_cookie, { audience = "a" })
+        assert.is_nil(sa)
+        assert.equals("session revoked", err_a)
+      end)
+
+      it("revocation keys: revoke a remembered session", function()
+        local conf = {
+          cookie_name = cookie_name,
+          storage = "cookie",
+          revocation = st,
+          remember = true,
+        }
+        conf[st] = storage_configs[st]
+        session.init(conf)
+
+        local cookies = {}
+        local s = session.new()
+        s:set_remember(true)
+        s:set_revocation_keys({ "sub:test" })
+        save_session(s, cookies)
+        local remember_cookie = extract_cookie("remember", cookies["Set-Cookie"])
+        assert.is_not_equal("", remember_cookie)
+        s:close()
+
+        session.__set_ngx_header(cookies)
+        session.__set_ngx_var({
+          ["cookie_remember"] = remember_cookie,
+        })
+        local s2 = session.new()
+        local ok, err = s2:open()
+        assert.is_true(ok)
+        assert.is_nil(err)
+        s2:close()
+
+        local mark_ok = store:set(cookie_name, mark_key("sub:test"), tostring(time()), long_ttl, time())
+        assert.is_not_nil(mark_ok)
+
+        session.__set_ngx_header(cookies)
+        session.__set_ngx_var({
+          ["cookie_remember"] = remember_cookie,
+        })
+        local s3 = session.new()
+        local ok3 = s3:open()
+        assert.is_nil(ok3)
       end)
     end)
   end)

@@ -951,14 +951,6 @@ local function open(self, remember, meta_only)
     end
   end
 
-  if not audience_index then
-    data[count + 1] = self.data[data_index]
-    self.state = STATE_NEW
-    self.data = data
-    self.data_index = count + 1
-    return nil, "missing session audience", true
-  end
-
   for i = 1, count do
     local keys = data[i][4]
     if keys and (remember or i == audience_index) then
@@ -969,7 +961,7 @@ local function open(self, remember, meta_only)
         end
         if revoked then
           if remember then
-            self.remember_meta = DUMMY_REMEMBER_META
+            self.remember_meta = {}
           else
             self.meta = DUMMY_META
           end
@@ -977,6 +969,14 @@ local function open(self, remember, meta_only)
         end
       end
     end
+  end
+
+  if not audience_index then
+    data[count + 1] = self.data[data_index]
+    self.state = STATE_NEW
+    self.data = data
+    self.data_index = count + 1
+    return nil, "missing session audience", true
   end
 
   self.state = STATE_OPEN

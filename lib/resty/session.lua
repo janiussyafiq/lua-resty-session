@@ -1958,11 +1958,9 @@ end
 ---
 -- Set session revocation keys.
 --
--- Revocation keys are application supplied identifiers carried in the
--- session payload for the current audience, for example an identity
--- provider's session or subject identifier. When a `revocation` storage
--- is configured, `session:open` rejects a session that carries a key
--- revoked with `session.revoke` at or after the session was created.
+-- Application supplied identifiers (e.g. an identity provider's session
+-- or subject id) carried in the payload; `session.revoke` revokes sessions
+-- by them.
 --
 -- @function instance:set_revocation_keys
 -- @tparam table|nil keys array of revocation keys (`nil` clears them)
@@ -2974,6 +2972,48 @@ function session.destroy(configuration)
   end
 
   return true, nil, true, true
+end
+
+
+---
+-- Revoke sessions by a revocation key.
+--
+-- Writes a mark for an application supplied key (see
+-- `session:set_revocation_keys`); sessions carrying it that were created
+-- at or before now are rejected on open. `ttl` must cover the sessions'
+-- absolute timeout. Write failures are always returned.
+--
+-- @function module.revoke
+-- @tparam string key revocation key
+-- @tparam number ttl mark time-to-live in seconds
+-- @tparam[opt] table configuration session @{configuration} overrides
+-- @treturn boolean `true` when the mark was written, otherwise `nil`
+-- @treturn string error message
+--
+-- @usage
+-- local ok, err = require("resty.session").revoke("sub:" .. sub, 86400)
+function session.revoke(key, ttl, configuration)
+  assert(type(key) == "string" and key ~= "", "invalid revocation key")
+  assert(type(ttl) == "number" and ttl > 0, "invalid revocation ttl")
+
+  local self = session.new(configuration)
+  local revocation = self.revocation
+  if not revocation then
+    return nil, "session revocation is not enabled"
+  end
+
+  local storage_key, err = self.hash_storage_key(key)
+  if not storage_key then
+    return nil, err
+  end
+
+  local current_time = time()
+  local ok, err = revocation:set(self.cookie_name, storage_key, tostring(current_time), ttl, current_time)
+  if not ok then
+    return nil, errmsg(err, "unable to revoke session key")
+  end
+
+  return true
 end
 
 

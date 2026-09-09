@@ -198,6 +198,36 @@ for _, st in ipairs({
         s2:close()
       end)
 
+      it("revoke: session carrying a revoked key cannot be reopened", function()
+        local cookies = {}
+        local s = session.new()
+        s:set_revocation_keys({ "sub:test" })
+        local session_cookie = save_session(s, cookies)
+        s:close()
+
+        assert.is_true(session.revoke("sub:test", long_ttl))
+
+        local s2, err = open_session(session_cookie)
+        assert.is_nil(s2)
+        assert.equals("session revoked", err)
+      end)
+
+      it("revoke: session created after the revocation opens", function()
+        assert.is_true(session.revoke("sub:test", long_ttl))
+        sleep(1)
+
+        local cookies = {}
+        local s = session.new()
+        s:set_revocation_keys({ "sub:test" })
+        local session_cookie = save_session(s, cookies)
+        s:close()
+
+        local s2, err = open_session(session_cookie)
+        assert.is_not_nil(s2)
+        assert.is_nil(err)
+        s2:close()
+      end)
+
       it("destroy: rejected cookie cannot be reopened", function()
         local cookies = {}
         local s = session.new()

@@ -371,7 +371,7 @@ describe("Revocation tests 2 session: revocation_fail_mode", function()
     assert.equals("open", s.state)
   end)
 
-  it("revoke: reports a failed write even in open fail mode", function()
+  it("revoke_subject: reports a failed write even in open fail mode", function()
     session.init({
       cookie_name = cookie_name,
       storage = "cookie",
@@ -386,7 +386,7 @@ describe("Revocation tests 2 session: revocation_fail_mode", function()
       revocation_fail_mode = "open",
     })
 
-    local ok, err = session.revoke("sub:test", 60)
+    local ok, err = session.revoke_subject("test", 60)
     assert.is_nil(ok)
     assert.matches("unable to revoke session key", err)
   end)
@@ -440,10 +440,10 @@ describe("Revocation tests 2 session: Fields validation", function()
     assert.matches("invalid revocation fail mode", err)
   end)
 
-  it("revoke fails when revocation is not enabled", function()
+  it("revoke_subject fails when revocation is not enabled", function()
     session.init({ storage = "cookie" })
 
-    local ok, err = session.revoke("sub:test", 60)
+    local ok, err = session.revoke_subject("test", 60)
     assert.is_nil(ok)
     assert.equals("session revocation is not enabled", err)
   end)

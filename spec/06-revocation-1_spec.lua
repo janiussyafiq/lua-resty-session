@@ -163,11 +163,17 @@ for _, st in ipairs({
         return s
       end
 
-      local function mark_key(key)
-        return session.new().hash_storage_key(key)
+      local function subject_mark_key(subject)
+        local s = session.new()
+        return s.hash_storage_key("subject:" .. s.hash_subject(subject))
       end
 
-      local revocation_keys = { "sub:test", "sub:legacy", "sub:other", "sub:aud-a" }
+      local function sid_mark_key(sid)
+        return session.new().hash_storage_key("sid:" .. sid)
+      end
+
+      local subjects = { "test", "legacy", "other", "aud-a" }
+      local sids = { "test" }
 
       before_each(function()
         local conf = {
@@ -180,8 +186,11 @@ for _, st in ipairs({
       end)
 
       after_each(function()
-        for _, k in ipairs(revocation_keys) do
-          store:delete(cookie_name, mark_key(k), time())
+        for _, subject in ipairs(subjects) do
+          store:delete(cookie_name, subject_mark_key(subject), time())
+        end
+        for _, sid in ipairs(sids) do
+          store:delete(cookie_name, sid_mark_key(sid), time())
         end
       end)
 
@@ -198,27 +207,27 @@ for _, st in ipairs({
         s2:close()
       end)
 
-      it("revoke: session carrying a revoked key cannot be reopened", function()
+      it("revoke_subject: session carrying a revoked key cannot be reopened", function()
         local cookies = {}
         local s = session.new()
-        s:set_revocation_keys({ "sub:test" })
+        s:set_subject("test")
         local session_cookie = save_session(s, cookies)
         s:close()
 
-        assert.is_true(session.revoke("sub:test", long_ttl))
+        assert.is_true(session.revoke_subject("test", long_ttl))
 
         local s2, err = open_session(session_cookie)
         assert.is_nil(s2)
         assert.equals("session revoked", err)
       end)
 
-      it("revoke: session created after the revocation opens", function()
-        assert.is_true(session.revoke("sub:test", long_ttl))
+      it("revoke_subject: session created after the revocation opens", function()
+        assert.is_true(session.revoke_subject("test", long_ttl))
         sleep(1)
 
         local cookies = {}
         local s = session.new()
-        s:set_revocation_keys({ "sub:test" })
+        s:set_subject("test")
         local session_cookie = save_session(s, cookies)
         s:close()
 
@@ -228,14 +237,14 @@ for _, st in ipairs({
         s2:close()
       end)
 
-      it("revoke: re-login after a revoked open gets a fresh session", function()
+      it("revoke_subject: re-login after a revoked open gets a fresh session", function()
         local cookies = {}
         local s = session.new()
-        s:set_revocation_keys({ "sub:test" })
+        s:set_subject("test")
         local session_cookie = save_session(s, cookies)
         s:close()
 
-        assert.is_true(session.revoke("sub:test", long_ttl))
+        assert.is_true(session.revoke_subject("test", long_ttl))
 
         session.__set_ngx_var({
           ["cookie_" .. cookie_name] = session_cookie,
@@ -245,7 +254,7 @@ for _, st in ipairs({
         assert.is_false(exists)
 
         sleep(1)
-        s2:set_revocation_keys({ "sub:test" })
+        s2:set_subject("test")
         session_cookie = save_session(s2, cookies)
         s2:close()
 
@@ -256,7 +265,7 @@ for _, st in ipairs({
         s3:close()
       end)
 
-      it("revoke: remember cookie carrying a revoked audience is not restored", function()
+      it("revoke_subject: remember cookie carrying a revoked audience is not restored", function()
         local conf = {
           cookie_name = cookie_name,
           storage = "cookie",
@@ -269,7 +278,7 @@ for _, st in ipairs({
         local cookies = {}
         local a = session.new({ audience = "a" })
         a:set_remember(true)
-        a:set_revocation_keys({ "sub:aud-a" })
+        a:set_subject("aud-a")
         local session_cookie = save_session(a, cookies)
         local remember_cookie = extract_cookie("remember", cookies["Set-Cookie"])
         a:close()
@@ -287,7 +296,7 @@ for _, st in ipairs({
         assert.is_not_equal("", remember_cookie)
         b:close()
 
-        assert.is_true(session.revoke("sub:aud-a", long_ttl))
+        assert.is_true(session.revoke_subject("aud-a", long_ttl))
 
         session.__set_ngx_header(cookies)
         session.__set_ngx_var({
@@ -298,7 +307,7 @@ for _, st in ipairs({
         assert.is_nil(ok)
       end)
 
-      it("revoke: remember cookie with a revoked audience is not restored for a new audience", function()
+      it("revoke_subject: remember cookie with a revoked audience is not restored for a new audience", function()
         local conf = {
           cookie_name = cookie_name,
           storage = "cookie",
@@ -311,12 +320,12 @@ for _, st in ipairs({
         local cookies = {}
         local a = session.new({ audience = "a" })
         a:set_remember(true)
-        a:set_revocation_keys({ "sub:aud-a" })
+        a:set_subject("aud-a")
         save_session(a, cookies)
         local remember_cookie = extract_cookie("remember", cookies["Set-Cookie"])
         a:close()
 
-        assert.is_true(session.revoke("sub:aud-a", long_ttl))
+        assert.is_true(session.revoke_subject("aud-a", long_ttl))
 
         session.__set_ngx_var({
           ["cookie_remember"] = remember_cookie,
@@ -333,7 +342,7 @@ for _, st in ipairs({
         assert.equals("missing session audience", err)
       end)
 
-      it("revoke: re-login after revocation issues a fresh remember cookie", function()
+      it("revoke_subject: re-login after revocation issues a fresh remember cookie", function()
         local conf = {
           cookie_name = cookie_name,
           storage = "cookie",
@@ -346,12 +355,12 @@ for _, st in ipairs({
         local cookies = {}
         local s = session.new()
         s:set_remember(true)
-        s:set_revocation_keys({ "sub:test" })
+        s:set_subject("test")
         local session_cookie = save_session(s, cookies)
         local remember_cookie = extract_cookie("remember", cookies["Set-Cookie"])
         s:close()
 
-        assert.is_true(session.revoke("sub:test", long_ttl))
+        assert.is_true(session.revoke_subject("test", long_ttl))
         sleep(1)
 
         session.__set_ngx_var({
@@ -362,7 +371,7 @@ for _, st in ipairs({
         assert.equals("session revoked", err)
 
         s2:set_remember(true)
-        s2:set_revocation_keys({ "sub:test" })
+        s2:set_subject("test")
         cookies = {}
         save_session(s2, cookies)
         remember_cookie = extract_cookie("remember", cookies["Set-Cookie"])
@@ -430,29 +439,59 @@ for _, st in ipairs({
         s3:close()
       end)
 
-      it("revocation keys: round-trip through the cookie without a subject", function()
+      it("sid: round-trip through the cookie without a subject", function()
         local cookies = {}
         local s = session.new()
-        s:set_revocation_keys({ "sub:test", "sid:test" })
+        s:set_sid("test")
         local session_cookie = save_session(s, cookies)
         s:close()
 
         local s2, err = open_session(session_cookie)
         assert.is_not_nil(s2)
         assert.is_nil(err)
-        assert.same({ "sub:test", "sid:test" }, s2:get_revocation_keys())
+        assert.equals("test", s2:get_sid())
         assert.is_nil(s2:get_subject())
         s2:close()
       end)
 
-      it("revocation keys: mark at or after creation revokes", function()
+      it("revoke_sid: session carrying a revoked sid cannot be reopened", function()
         local cookies = {}
         local s = session.new()
-        s:set_revocation_keys({ "sub:test" })
+        s:set_subject("other")
+        s:set_sid("test")
         local session_cookie = save_session(s, cookies)
         s:close()
 
-        local ok = store:set(cookie_name, mark_key("sub:test"), tostring(time()), long_ttl, time())
+        assert.is_true(session.revoke_sid("test", long_ttl))
+
+        local s2, err = open_session(session_cookie)
+        assert.is_nil(s2)
+        assert.equals("session revoked", err)
+      end)
+
+      it("revoke_sid: does not revoke a session whose subject matches the sid", function()
+        local cookies = {}
+        local s = session.new()
+        s:set_subject("test")
+        local session_cookie = save_session(s, cookies)
+        s:close()
+
+        assert.is_true(session.revoke_sid("test", long_ttl))
+
+        local s2, err = open_session(session_cookie)
+        assert.is_not_nil(s2)
+        assert.is_nil(err)
+        s2:close()
+      end)
+
+      it("subject mark: mark at or after creation revokes", function()
+        local cookies = {}
+        local s = session.new()
+        s:set_subject("test")
+        local session_cookie = save_session(s, cookies)
+        s:close()
+
+        local ok = store:set(cookie_name, subject_mark_key("test"), tostring(time()), long_ttl, time())
         assert.is_not_nil(ok)
 
         local s2, err = open_session(session_cookie)
@@ -460,13 +499,13 @@ for _, st in ipairs({
         assert.equals("session revoked", err)
       end)
 
-      it("revocation keys: mark before creation does not revoke", function()
-        local ok = store:set(cookie_name, mark_key("sub:test"), tostring(time() - 1), long_ttl, time())
+      it("subject mark: mark before creation does not revoke", function()
+        local ok = store:set(cookie_name, subject_mark_key("test"), tostring(time() - 1), long_ttl, time())
         assert.is_not_nil(ok)
 
         local cookies = {}
         local s = session.new()
-        s:set_revocation_keys({ "sub:test" })
+        s:set_subject("test")
         local session_cookie = save_session(s, cookies)
         s:close()
 
@@ -477,13 +516,13 @@ for _, st in ipairs({
         s2:close()
       end)
 
-      it("revocation keys: legacy mark revokes regardless of time", function()
-        local ok = store:set(cookie_name, mark_key("sub:legacy"), "1", long_ttl, time())
+      it("subject mark: legacy mark revokes regardless of time", function()
+        local ok = store:set(cookie_name, subject_mark_key("legacy"), "1", long_ttl, time())
         assert.is_not_nil(ok)
 
         local cookies = {}
         local s = session.new()
-        s:set_revocation_keys({ "sub:legacy" })
+        s:set_subject("legacy")
         local session_cookie = save_session(s, cookies)
         s:close()
 
@@ -492,14 +531,14 @@ for _, st in ipairs({
         assert.equals("session revoked", err)
       end)
 
-      it("revocation keys: mark for another key does not revoke", function()
+      it("subject mark: mark for another key does not revoke", function()
         local cookies = {}
         local s = session.new()
-        s:set_revocation_keys({ "sub:test" })
+        s:set_subject("test")
         local session_cookie = save_session(s, cookies)
         s:close()
 
-        local ok = store:set(cookie_name, mark_key("sub:other"), tostring(time()), long_ttl, time())
+        local ok = store:set(cookie_name, subject_mark_key("other"), tostring(time()), long_ttl, time())
         assert.is_not_nil(ok)
 
         local s2, err = open_session(session_cookie)
@@ -509,10 +548,10 @@ for _, st in ipairs({
         s2:close()
       end)
 
-      it("revocation keys: are scoped to the audience", function()
+      it("subject mark: are scoped to the audience", function()
         local cookies = {}
         local s = session.new({ audience = "a" })
-        s:set_revocation_keys({ "sub:aud-a" })
+        s:set_subject("aud-a")
         local session_cookie = save_session(s, cookies)
         s:close()
 
@@ -526,7 +565,7 @@ for _, st in ipairs({
         local both_audiences_cookie = save_session(s2, cookies)
         s2:close()
 
-        local ok = store:set(cookie_name, mark_key("sub:aud-a"), tostring(time()), long_ttl, time())
+        local ok = store:set(cookie_name, subject_mark_key("aud-a"), tostring(time()), long_ttl, time())
         assert.is_not_nil(ok)
 
         local sb, err_b = open_session(both_audiences_cookie, { audience = "b" })
@@ -539,7 +578,7 @@ for _, st in ipairs({
         assert.equals("session revoked", err_a)
       end)
 
-      it("revocation keys: revoke a remembered session", function()
+      it("subject mark: revoke a remembered session", function()
         local conf = {
           cookie_name = cookie_name,
           storage = "cookie",
@@ -552,7 +591,7 @@ for _, st in ipairs({
         local cookies = {}
         local s = session.new()
         s:set_remember(true)
-        s:set_revocation_keys({ "sub:test" })
+        s:set_subject("test")
         save_session(s, cookies)
         local remember_cookie = extract_cookie("remember", cookies["Set-Cookie"])
         assert.is_not_equal("", remember_cookie)
@@ -568,7 +607,7 @@ for _, st in ipairs({
         assert.is_nil(err)
         s2:close()
 
-        local mark_ok = store:set(cookie_name, mark_key("sub:test"), tostring(time()), long_ttl, time())
+        local mark_ok = store:set(cookie_name, subject_mark_key("test"), tostring(time()), long_ttl, time())
         assert.is_not_nil(mark_ok)
 
         session.__set_ngx_header(cookies)

@@ -416,6 +416,32 @@ local function is_revoked(self, key, cookie_name, current_time, creation_time)
 end
 
 
+local function subject_revocation_key(self, subject)
+  return "subject:" .. self.hash_subject(subject)
+end
+
+
+local function sid_revocation_key(sid)
+  return "sid:" .. sid
+end
+
+
+local function is_revoked_by(self, subject, sid, current_time, creation_time)
+  if subject then
+    local revoked, err = is_revoked(self, subject_revocation_key(self, subject), self.cookie_name, current_time, creation_time)
+    if revoked or err then
+      return revoked, err
+    end
+  end
+
+  if sid then
+    return is_revoked(self, sid_revocation_key(sid), self.cookie_name, current_time, creation_time)
+  end
+
+  return false, nil
+end
+
+
 local function mark_session_revoked(self, remember, meta)
   if self.storage then
     return true
@@ -941,9 +967,12 @@ local function open(self, remember, meta_only)
   local audience_index
   local count = #data
   for i = 1, count do
-    -- cjson decodes the JSON null of a missing subject as userdata
+    -- cjson decodes the JSON null of a missing subject or sid as userdata
     if type(data[i][3]) == "userdata" then
       data[i][3] = nil
+    end
+    if type(data[i][4]) == "userdata" then
+      data[i][4] = nil
     end
 
     if not audience_index and data[i][2] == audience then
@@ -951,11 +980,10 @@ local function open(self, remember, meta_only)
     end
   end
 
-  for i = 1, count do
-    local keys = data[i][4]
-    if keys and (remember or i == audience_index) then
-      for j = 1, #keys do
-        local revoked, err = is_revoked(self, keys[j], self.cookie_name, current_time, creation_time)
+  if self.revocation then
+    for i = 1, count do
+      if remember or i == audience_index then
+        local revoked, err = is_revoked_by(self, data[i][3], data[i][4], current_time, creation_time)
         if err then
           return nil, err
         end
@@ -1963,38 +1991,37 @@ end
 
 
 ---
--- Set session revocation keys.
+-- Set session sid.
 --
--- Application supplied identifiers (e.g. an identity provider's session
--- or subject id) carried in the payload; `session.revoke` revokes sessions
--- by them.
+-- An identity provider's session id (e.g. the OpenID Connect `sid` claim)
+-- carried in the payload; `session.revoke_sid` revokes sessions by it.
 --
--- @function instance:set_revocation_keys
--- @tparam table|nil keys array of revocation keys (`nil` clears them)
+-- @function instance:set_sid
+-- @tparam string|nil sid identity provider session id (`nil` clears it)
 --
 -- @usage
 -- local session = require("resty.session").new()
--- session:set_revocation_keys({ "sid:" .. sid, "sub:" .. sub })
-function metatable:set_revocation_keys(keys)
-  assert(self.state ~= STATE_CLOSED, "unable to set revocation keys on closed session")
-  assert(keys == nil or type(keys) == "table", "invalid revocation keys")
-  self.data[self.data_index][4] = keys
+-- session:set_sid(id_token.sid)
+function metatable:set_sid(sid)
+  assert(self.state ~= STATE_CLOSED, "unable to set sid on closed session")
+  assert(sid == nil or type(sid) == "string", "invalid sid")
+  self.data[self.data_index][4] = sid
 end
 
 
 ---
--- Get session revocation keys.
+-- Get session sid.
 --
--- @function instance:get_revocation_keys
--- @treturn table|nil array of revocation keys
+-- @function instance:get_sid
+-- @treturn string|nil identity provider session id
 --
 -- @usage
 -- local session, err, exists = require("resty.session").open()
 -- if exists then
---   local keys = session:get_revocation_keys()
+--   local sid = session:get_sid()
 -- end
-function metatable:get_revocation_keys()
-  assert(self.state ~= STATE_CLOSED, "unable to get revocation keys on closed session")
+function metatable:get_sid()
+  assert(self.state ~= STATE_CLOSED, "unable to get sid on closed session")
   return self.data[self.data_index][4]
 end
 
@@ -2982,29 +3009,7 @@ function session.destroy(configuration)
 end
 
 
----
--- Revoke sessions by a revocation key.
---
--- Writes a mark for an application supplied key (see
--- `session:set_revocation_keys`); sessions carrying it that were created
--- at or before now are rejected on open. `ttl` must cover the sessions'
--- absolute timeout (`remember_absolute_timeout` with remember cookies).
--- Write failures are always returned.
---
--- @function module.revoke
--- @tparam string key revocation key
--- @tparam number ttl mark time-to-live in seconds
--- @tparam[opt] table configuration session @{configuration} overrides
--- @treturn boolean `true` when the mark was written, otherwise `nil`
--- @treturn string error message
---
--- @usage
--- local ok, err = require("resty.session").revoke("sub:" .. sub, 86400)
-function session.revoke(key, ttl, configuration)
-  assert(type(key) == "string" and key ~= "", "invalid revocation key")
-  assert(type(ttl) == "number" and ttl > 0, "invalid revocation ttl")
-
-  local self = session.new(configuration)
+local function revoke(self, key, ttl)
   local revocation = self.revocation
   if not revocation then
     return nil, "session revocation is not enabled"
@@ -3022,6 +3027,58 @@ function session.revoke(key, ttl, configuration)
   end
 
   return true
+end
+
+
+---
+-- Revoke sessions by subject.
+--
+-- Writes a mark for a subject (see `session:set_subject`); sessions carrying
+-- it that were created at or before now are rejected on open. `ttl` must
+-- cover the sessions' absolute timeout (`remember_absolute_timeout` with
+-- remember cookies). Write failures are always returned.
+--
+-- @function module.revoke_subject
+-- @tparam string subject subject
+-- @tparam number ttl mark time-to-live in seconds
+-- @tparam[opt] table configuration session @{configuration} overrides
+-- @treturn boolean `true` when the mark was written, otherwise `nil`
+-- @treturn string error message
+--
+-- @usage
+-- local ok, err = require("resty.session").revoke_subject("john@doe.com", 86400)
+function session.revoke_subject(subject, ttl, configuration)
+  assert(type(subject) == "string" and subject ~= "", "invalid subject")
+  assert(type(ttl) == "number" and ttl > 0, "invalid revocation ttl")
+
+  local self = session.new(configuration)
+  return revoke(self, subject_revocation_key(self, subject), ttl)
+end
+
+
+---
+-- Revoke sessions by sid.
+--
+-- Writes a mark for an identity provider session id (see `session:set_sid`);
+-- sessions carrying it that were created at or before now are rejected on
+-- open. `ttl` must cover the sessions' absolute timeout
+-- (`remember_absolute_timeout` with remember cookies). Write failures are
+-- always returned.
+--
+-- @function module.revoke_sid
+-- @tparam string sid identity provider session id
+-- @tparam number ttl mark time-to-live in seconds
+-- @tparam[opt] table configuration session @{configuration} overrides
+-- @treturn boolean `true` when the mark was written, otherwise `nil`
+-- @treturn string error message
+--
+-- @usage
+-- local ok, err = require("resty.session").revoke_sid(logout_token.sid, 86400)
+function session.revoke_sid(sid, ttl, configuration)
+  assert(type(sid) == "string" and sid ~= "", "invalid sid")
+  assert(type(ttl) == "number" and ttl > 0, "invalid revocation ttl")
+
+  return revoke(session.new(configuration), sid_revocation_key(sid), ttl)
 end
 
 
